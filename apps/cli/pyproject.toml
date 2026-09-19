@@ -12,6 +12,7 @@ dependencies = [
     "edgewise-semantic",
     "edgewise-types",
     "Pillow",
+    "python-dotenv",
 ]
 
 [project.scripts]

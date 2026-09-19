@@ -70,7 +70,7 @@ Prerequisites: Python 3.10+, and `uv` (recommended) or pip.
 
 ```bash
 uv sync
-edgewise --help
+uv run edgewise --help
 ```
 
 Plain pip fallback:

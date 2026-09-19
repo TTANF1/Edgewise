@@ -9,11 +9,8 @@ description = "Swappable semantic review backends for edgewise (Layer 2)"
 requires-python = ">=3.10"
 dependencies = [
     "edgewise-types",
+    "typesafe-sdk",
 ]
-
-[project.optional-dependencies]
-# The Jev adapter only needs the SDK at runtime, so it is optional here.
-api = ["typesafe-sdk"]
 
 [tool.setuptools.packages.find]
 where = ["."]

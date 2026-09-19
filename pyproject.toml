@@ -2,7 +2,7 @@
 #
 # The repo is managed as a `uv` workspace (https://docs.astral.sh/uv/):
 #   uv sync          # install every member into .venv
-#   edgewise --help  # run the CLI
+#   uv run edgewise --help   # run the CLI
 #
 # Plain pip fallback (order matters, types first):
 #   pip install -e packages/types -e packages/core -e packages/semantic -e apps/cli
@@ -15,6 +15,8 @@ members = [
     "apps/cli",
 ]
 
-# Convenience: `uv run edgewise` resolves to the CLI without flags.
-[tool.uv]
-default-members = ["apps/cli"]
+[tool.uv.sources]
+edgewise-types = { workspace = true }
+edgewise-core = { workspace = true }
+edgewise-semantic = { workspace = true }
+edgewise-cli = { workspace = true }

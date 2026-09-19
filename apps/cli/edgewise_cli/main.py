@@ -7,7 +7,13 @@ import json
 import os
 import sys
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
+
+# Load .env from the project root (or cwd) before reading env vars.
+from dotenv import load_dotenv
+
+load_dotenv()  # looks for .env in cwd and parents; no-op if missing
 
 from edgewise_types.params import DecontaminationParams
 
