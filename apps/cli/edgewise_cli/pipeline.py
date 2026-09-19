@@ -78,13 +78,35 @@ def analyze_frame(
         # Opaque wall-backed frame: flood-fill the wall to transparency first.
         rgb = rgba_init[:, :, :3]
         rgba = remove_background(rgb, params.wall_rgb, params.background_tolerance)
-        # Then clear trapped background (pixels enclosed by subject that
-        # flood-fill couldn't reach — gaps between monitor and wall, etc.)
-        from edgewise_core.mask.trapped import clear_trapped_background, detect_trapped_background
+
+        # Region Analyzer: detect trapped background regions and decide
+        # which ones to remove (replaces simple pixel-distance threshold).
+        from edgewise_core.segmentation.analyzer import detect_regions
+        from edgewise_core.mask.trapped import detect_trapped_background
+
         trapped = detect_trapped_background(rgba, params.wall_rgb)
         if trapped.any():
-            print(f"  trapped background: {int(trapped.sum())} px")
-            rgba = clear_trapped_background(rgba, trapped)
+            alpha_px = rgba[:, :, 3]
+            rgb_px = rgba[:, :, :3]
+            regions = detect_regions(trapped, alpha_px, rgb_px, params.wall_rgb)
+            removed_regions = 0
+            removed_px = 0
+            for region in regions:
+                f = region.features
+                # Deterministic decision: high enclosure + high bg similarity
+                # + low reachability = definitely trapped background gap
+                is_trapped_gap = (
+                    f.enclosure > 0.7
+                    and f.background_similarity > 0.7
+                    and f.background_reachability < 0.2
+                )
+                if is_trapped_gap:
+                    for y, x in region.pixels:
+                        rgba[int(y), int(x), 3] = int(rgba[int(y), int(x), 3] * 0.5)
+                    removed_regions += 1
+                    removed_px += region.area
+            print(f"  regions: {len(regions)}, trapped gaps removed: {removed_regions} ({removed_px} px)")
+
         im = Image.fromarray(rgba.astype(np.uint8))
     else:
         im = opened.convert("RGBA")
