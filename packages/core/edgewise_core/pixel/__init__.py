@@ -1,5 +1,6 @@
-"""Color math: RGB<->HSL, luminance, distance, blending."""
+"""Color math: RGB<->HSL, luminance, distance, blending, input analysis."""
 
+from edgewise_core.pixel.analyze import InputAnalysis, analyze_input
 from edgewise_core.pixel.color import (
     blend_toward,
     color_distance,
@@ -9,6 +10,8 @@ from edgewise_core.pixel.color import (
 )
 
 __all__ = [
+    "InputAnalysis",
+    "analyze_input",
     "blend_toward",
     "color_distance",
     "luminance",

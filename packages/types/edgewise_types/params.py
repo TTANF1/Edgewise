@@ -38,9 +38,9 @@ class DecontaminationParams:
     wall_pct_force: float = 0.40     # force a verdict above this
 
     # -- blending ----------------------------------------------------------
-    base_blend: float = 0.30           # every edge pixel pulls 30% toward interior
-    force_blend: float = 0.80          # rule-confirmed pixels pull 80%
+    base_blend: float = 0.50           # every edge pixel pulls 50% toward interior
+    force_blend: float = 0.95          # rule-confirmed pixels pull 95%
     jev_threshold: float = 0.40        # model probability above this -> REMOVE
     jev_uncertain_floor: float = 0.30  # below this -> KEEP
     jev_max_extra_blend: float = 0.50  # max extra pull granted by semantic review
-    alpha_decay: float = 0.25          # alpha loss = blend * alpha_decay
+    alpha_decay: float = 0.60          # alpha loss = blend * alpha_decay

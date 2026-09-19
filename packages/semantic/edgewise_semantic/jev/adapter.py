@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from typing import Sequence
 
-from edgewise_semantic.jev.prompt import build_questions
+from edgewise_semantic.jev.prompt import build_questions, build_wall_questions
 from edgewise_types.candidate import EdgeCandidate, RGB
 
 # The SDK is imported lazily inside _get_client() so that the package
@@ -79,3 +79,28 @@ class JevReviewer:
             os.environ["TYPESAFE_API_KEY"] = self._api_key
             self._client = TypeSafeClient()
         return self._client
+
+    def confirm_background_color(
+        self,
+        candidates: list[RGB],
+        interior_sample: RGB,
+    ) -> RGB | None:
+        """Ask Jev which corner sample is the real wall color."""
+        if not self._api_key:
+            return None
+        if len(candidates) < 2:
+            return candidates[0] if candidates else None
+
+        client = self._get_client()
+        resp = client.system_one(
+            state="Pixel-art scene wall color identification.",
+            questions=build_wall_questions(candidates, interior_sample, self._scene_hint),
+        )
+
+        best_rgb, best_p = None, 0.0
+        for i, rgb in enumerate(candidates):
+            p = float(resp.answers[f"w{i}"].noul)
+            if p > best_p:
+                best_rgb, best_p = rgb, p
+
+        return best_rgb if best_p > 0.5 else None

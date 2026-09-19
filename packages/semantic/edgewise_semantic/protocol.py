@@ -20,3 +20,14 @@ class SemanticReviewer(Protocol):
         pipeline (see DecontaminationParams.jev_uncertain_floor).
         """
         ...
+
+    def confirm_background_color(
+        self,
+        candidates: list[RGB],
+        interior_sample: RGB,
+    ) -> RGB | None:
+        """Identify the true background wall color from corner samples.
+
+        Returns the confirmed wall_rgb, or None if the model cannot decide.
+        """
+        ...

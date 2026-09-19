@@ -41,3 +41,29 @@ def build_questions(
             ),
         }
     return questions
+
+
+def build_wall_questions(
+    candidates: list[RGB],
+    interior_sample: RGB,
+    scene_hint: str,
+) -> dict[str, dict]:
+    """Ask Jev which candidate color is the actual background wall.
+
+    `candidates` are corner-sampled colors; `interior_sample` is a known
+    subject pixel for contrast.
+    """
+    ir, ig, ib = interior_sample
+    questions: dict[str, dict] = {}
+    for i, (r, g, b) in enumerate(candidates):
+        questions[f"w{i}"] = {
+            "type": "noul",
+            "instructions": (
+                f"Pixel-art scene: {scene_hint}. We sampled several colors from the image "
+                f"corners to identify the background wall. Candidate RGB({r},{g},{b}) "
+                f"(brightness {_lum(r, g, b)}). Known subject interior is RGB({ir},{ig},{ib}) "
+                f"(brightness {_lum(ir, ig, ib)}). Is this candidate the actual flat background "
+                f"wall color (not a subject pixel, not shadow, not gradient noise)?"
+            ),
+        }
+    return questions

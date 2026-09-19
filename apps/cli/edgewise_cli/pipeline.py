@@ -8,6 +8,7 @@ Orchestrates the three layers for one frame:
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import numpy as np
@@ -16,6 +17,7 @@ from PIL import Image
 from edgewise_core.edge.detect import edge_and_interior_masks, nearest_interior_indices
 from edgewise_core.edge.rules import flag_edge_pixels
 from edgewise_core.mask.background import remove_background
+from edgewise_core.pixel.analyze import analyze_input
 from edgewise_core.pixel.color import blend_toward
 from edgewise_semantic.protocol import SemanticReviewer
 from edgewise_types.candidate import EdgeCandidate, RGB
@@ -26,12 +28,55 @@ Masks = dict[str, np.ndarray]
 Analysis = tuple[Image.Image, list[EdgeCandidate], Masks]
 
 
-def analyze_frame(img_path: str, params: DecontaminationParams) -> Analysis:
-    """Layer 1: masks, nearest interior, and rule-based candidates. No API."""
+def analyze_frame(
+    img_path: str,
+    params: DecontaminationParams,
+    reviewer: SemanticReviewer | None = None,
+    skip_jev: bool = False,
+) -> Analysis:
+    """Layer 1: Step 0 input analysis + masks, candidates. No API."""
     opened = Image.open(img_path)
+    rgba_init = np.asarray(opened.convert("RGBA")).astype(np.float64)
+
+    # Step 0: auto-detect frame properties (opaque? wall color?)
+    info = analyze_input(rgba_init)
+    if info.needs_background_removal and params.background_tolerance is None:
+        # Auto-enable background removal with detected wall color
+        params = replace(
+            params,
+            background_tolerance=info.suggested_tolerance,
+            wall_rgb=info.wall_rgb,
+        )
+        print(f"  [auto] opaque frame detected, wall_rgb={info.wall_rgb}, tolerance={info.suggested_tolerance:.0f}")
+
+    # Step 0b: Jev wall-color confirmation when auto-detection is uncertain
+    if (
+        reviewer is not None
+        and not skip_jev
+        and info.needs_background_removal
+        and info.wall_std > 15.0  # corner colors disagree → ask Jev
+    ):
+        from edgewise_core.pixel.analyze import _sample_border_colors
+        samples = _sample_border_colors(rgba_init[:, :, :3])
+        sorted_by_lum = sorted(
+            [tuple(v) for v in samples],
+            key=lambda c: 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2],
+        )
+        candidates = sorted_by_lum[::max(1, len(sorted_by_lum) // 3)][:3]
+        h, w = rgba_init.shape[:2]
+        center = rgba_init[h // 2 - 5:h // 2 + 5, w // 2 - 5:w // 2 + 5, :3].mean(axis=(0, 1))
+        interior_sample = tuple(int(v) for v in center)
+
+        confirmed = reviewer.confirm_background_color(candidates, interior_sample)
+        if confirmed:
+            print(f"  [jev] wall_rgb confirmed: {info.wall_rgb} -> {confirmed}")
+            params = replace(params, wall_rgb=confirmed)
+        else:
+            print(f"  [jev] wall_rgb uncertain, keeping {info.wall_rgb}")
+
     if params.background_tolerance is not None:
         # Opaque wall-backed frame: flood-fill the wall to transparency first.
-        rgb = np.asarray(opened.convert("RGB")).astype(np.float64)
+        rgb = rgba_init[:, :, :3]
         rgba = remove_background(rgb, params.wall_rgb, params.background_tolerance)
         im = Image.fromarray(rgba.astype(np.uint8))
     else:
@@ -109,7 +154,7 @@ def decontaminate(
     skip_jev: bool = False,
 ) -> dict[str, Any]:
     """Full pipeline for one frame. Returns stats for reporting."""
-    im, candidates, masks = analyze_frame(img_path, params)
+    im, candidates, masks = analyze_frame(img_path, params, reviewer, skip_jev)
     edge = masks["edge"]
     print(
         f"  edge: {int(edge.sum())}, flagged: {len(candidates)}, "
