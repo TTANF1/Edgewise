@@ -1,9 +1,18 @@
 """Semantic layer contract."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol, Sequence
 
 from edgewise_types.candidate import EdgeCandidate, RGB
+
+
+@dataclass(frozen=True, slots=True)
+class QualityReport:
+    """Jev's verdict on a decontaminated frame."""
+    quality_score: float       # 0 = terrible, 1 = perfect
+    needs_more_iterations: bool  # True if halo still visible
+    issues: list[str]          # e.g. ["halo on head", "gap between monitor and wall"]
 
 
 class SemanticReviewer(Protocol):
@@ -30,4 +39,12 @@ class SemanticReviewer(Protocol):
 
         Returns the confirmed wall_rgb, or None if the model cannot decide.
         """
+        ...
+
+    def evaluate_quality(
+        self,
+        frame_path: str,
+        wall_rgb: RGB,
+    ) -> QualityReport:
+        """Judge whether a decontaminated frame is clean enough."""
         ...

@@ -18,7 +18,7 @@ from edgewise_types.candidate import RGB
 def detect_trapped_background(
     rgba: np.ndarray,
     wall_rgb: RGB,
-    wall_threshold: float = 25.0,
+    wall_threshold: float = 12.0,
 ) -> np.ndarray:
     """Return a boolean mask of pixels that look like trapped wall color.
 
@@ -26,7 +26,8 @@ def detect_trapped_background(
       - it is opaque (alpha >= 128)
       - its RGB is within `wall_threshold` (Euclidean) of `wall_rgb`
 
-    These are pixels flood-fill missed because they're enclosed by subject.
+    Threshold is tight (12.0) to avoid false-positives on light-colored
+    subject pixels (mug, steam, bright screen UI).
     """
     alpha = rgba[:, :, 3]
     rgb = rgba[:, :, :3]
@@ -38,7 +39,7 @@ def detect_trapped_background(
 def clear_trapped_background(
     rgba: np.ndarray,
     trapped_mask: np.ndarray,
-    alpha_decay: float = 0.70,
+    alpha_decay: float = 0.50,
 ) -> np.ndarray:
     """Shrink alpha of trapped pixels (they're pure wall, just fade out)."""
     result = rgba.copy()

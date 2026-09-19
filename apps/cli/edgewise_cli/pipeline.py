@@ -163,38 +163,71 @@ def decontaminate(
     params: DecontaminationParams,
     reviewer: SemanticReviewer | None = None,
     skip_jev: bool = False,
+    iterations: int = 3,
 ) -> dict[str, Any]:
-    """Full pipeline for one frame. Returns stats for reporting."""
-    im, candidates, masks = analyze_frame(img_path, params, reviewer, skip_jev)
-    edge = masks["edge"]
-    print(
-        f"  edge: {int(edge.sum())}, flagged: {len(candidates)}, "
-        f"force: {sum(1 for c in candidates if c.force)}"
-    )
+    """Full pipeline for one frame, iterated. Returns stats for reporting.
 
-    reviews: dict[RGB, float] = {}
-    if candidates and not skip_jev:
-        if reviewer is None:
-            raise ValueError("a reviewer is required unless --skip-jev is set")
-        reviews = reviewer.review(candidates)
-        confirmed = sum(
-            1
-            for p in reviews.values()
-            if decision_from_probability(p, params.jev_threshold, params.jev_uncertain_floor)
-            is Decision.REMOVE
+    Each iteration feeds the previous output back as input — residual halo
+    pixels that were semi-transparent last round become edge pixels this
+    round and get tightened further. Jev quality check decides when to stop.
+    """
+    current_path = img_path
+    last_edge_px = -1
+    quality_history: list[float] = []
+
+    for it in range(iterations):
+        im, candidates, masks = analyze_frame(current_path, params, reviewer, skip_jev)
+        edge = masks["edge"]
+        edge_px = int(edge.sum())
+        print(
+            f"  [iter {it+1}/{iterations}] edge: {edge_px}, flagged: {len(candidates)}, "
+            f"force: {sum(1 for c in candidates if c.force)}"
         )
-        print(f"  Jev confirmed: {confirmed} colors")
-        for rgb, p in sorted(reviews.items(), key=lambda kv: -kv[1])[:10]:
-            print(f"    RGB{rgb} -> {p:.2f}")
 
-    blend = build_blend_map(edge, candidates, reviews, params)
-    arr = np.asarray(im).astype(np.float64)
-    result = apply_decontamination(arr, blend, masks["iy"], masks["ix"], params)
-    Image.fromarray(result.astype(np.uint8)).save(out_path)
-    print(f"  tightened {len(blend)} edge px")
+        # Convergence check: edge px barely changed → stop early
+        if it > 0 and abs(edge_px - last_edge_px) < max(5, edge_px * 0.03):
+            print(f"  converged at iter {it+1} (edge px stable)")
+            reviews: dict[RGB, float] = {}
+            blend = build_blend_map(edge, candidates, reviews, params)
+            arr = np.asarray(im).astype(np.float64)
+            result = apply_decontamination(arr, blend, masks["iy"], masks["ix"], params)
+            Image.fromarray(result.astype(np.uint8)).save(out_path)
+            print(f"  tightened {len(blend)} edge px")
+            break
+        last_edge_px = edge_px
+
+        reviews: dict[RGB, float] = {}
+        if candidates and not skip_jev:
+            if reviewer is None:
+                raise ValueError("a reviewer is required unless --skip-jev is set")
+            reviews = reviewer.review(candidates)
+
+        blend = build_blend_map(edge, candidates, reviews, params)
+        arr = np.asarray(im).astype(np.float64)
+        result = apply_decontamination(arr, blend, masks["iy"], masks["ix"], params)
+
+        if it == iterations - 1:
+            Image.fromarray(result.astype(np.uint8)).save(out_path)
+            current_path = out_path
+        else:
+            import tempfile
+            tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            Image.fromarray(result.astype(np.uint8)).save(tmp.name)
+            current_path = tmp.name
+
+        print(f"  tightened {len(blend)} edge px")
+
+        # Jev quality evaluation: stop early if clean enough
+        if reviewer is not None and not skip_jev and it < iterations - 1:
+            report = reviewer.evaluate_quality(current_path, params.wall_rgb)
+            quality_history.append(report.quality_score)
+            print(f"  [jev] quality={report.quality_score:.2f}, issues: {report.issues or 'none'}")
+            if not report.needs_more_iterations:
+                print(f"  Jev says clean enough at iter {it+1}")
+                break
+
     return {
-        "edge_px": int(edge.sum()),
-        "flagged": len(candidates),
-        "force": sum(1 for c in candidates if c.force),
-        "reviewed": len(reviews),
+        "edge_px": edge_px,
+        "iterations": it + 1,
+        "quality_history": quality_history,
     }

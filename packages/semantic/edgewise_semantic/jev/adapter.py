@@ -5,6 +5,7 @@ import os
 from typing import Sequence
 
 from edgewise_semantic.jev.prompt import build_questions, build_wall_questions
+from edgewise_semantic.protocol import QualityReport
 from edgewise_types.candidate import EdgeCandidate, RGB
 
 # The SDK is imported lazily inside _get_client() so that the package
@@ -112,3 +113,76 @@ class JevReviewer:
                 best_rgb, best_p = rgb, p
 
         return best_rgb if best_p > 0.5 else None
+
+    def evaluate_quality(
+        self,
+        frame_path: str,
+        wall_rgb: RGB,
+    ) -> QualityReport:
+        """Judge whether a decontaminated frame still has visible halo."""
+        import numpy as np
+        from PIL import Image
+
+        img = np.asarray(Image.open(frame_path).convert("RGBA")).astype(float)
+        alpha = img[:, :, 3]
+        rgb = img[:, :, :3]
+
+        # Find the most suspicious edge pixels: semi-transparent AND bright
+        # (bright semi-transparent pixels are classic halo residue)
+        semi = (alpha > 30) & (alpha < 200)
+        if not semi.any():
+            return QualityReport(quality_score=0.95, needs_more_iterations=False, issues=[])
+
+        suspicious = rgb[semi]
+        wall = np.array(wall_rgb)
+        dist_to_wall = np.sqrt(((suspicious - wall) ** 2).sum(axis=1))
+
+        # Top 5 brightest semi-transparent pixels closest to wall color
+        brightness = suspicious.mean(axis=1)
+        score = brightness * (1.0 / (dist_to_wall + 10))
+        top_idx = np.argsort(-score)[:5]
+
+        candidates: list[tuple[RGB, float]] = []
+        for idx in top_idx:
+            px = tuple(int(v) for v in suspicious[idx])
+            candidates.append((px, float(dist_to_wall[idx])))
+
+        if not candidates:
+            return QualityReport(quality_score=0.9, needs_more_iterations=False, issues=[])
+
+        # Ask Jev: are these suspicious pixels still wall-bleed?
+        questions: dict[str, dict] = {}
+        for i, (px, dist) in enumerate(candidates):
+            questions[f"q{i}"] = {
+                "type": "noul",
+                "instructions": (
+                    f"Pixel art cutout quality check. Wall color is RGB{wall_rgb}. "
+                    f"Semi-transparent edge pixel RGB({px[0]},{px[1]},{px[2]}) "
+                    f"is {dist:.0f} away from wall color. "
+                    f"Is this pixel still contaminated by wall bleed (visible halo) "
+                    f"that needs another decontamination round?"
+                ),
+            }
+
+        client = self._get_client()
+        resp = client.system_one(
+            state="Pixel art cutout quality evaluation.",
+            questions=questions,
+        )
+
+        halo_count = 0
+        issues: list[str] = []
+        for i, (px, dist) in enumerate(candidates):
+            p = float(resp.answers[f"q{i}"].noul)
+            if p > 0.5:
+                halo_count += 1
+                issues.append(f"halo residue at RGB{px}")
+
+        quality = 1.0 - (halo_count / len(candidates))
+        needs_more = halo_count >= 2
+
+        return QualityReport(
+            quality_score=quality,
+            needs_more_iterations=needs_more,
+            issues=issues,
+        )
