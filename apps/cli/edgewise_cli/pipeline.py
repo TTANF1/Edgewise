@@ -115,7 +115,11 @@ def analyze_frame(
 
     candidates = flag_edge_pixels(edge, r, g, b, iy, ix, params)
 
-    masks: Masks = {"edge": edge, "iy": iy, "ix": ix}
+    # Boundary Normal Sampling: per-pixel local background score
+    from edgewise_core.edge.normal_sampling import boundary_evidence
+    evidence = boundary_evidence(arr, edge, interior)
+
+    masks: Masks = {"edge": edge, "iy": iy, "ix": ix, "boundary_evidence": evidence}
     return im, candidates, masks
 
 
@@ -124,12 +128,14 @@ def build_blend_map(
     candidates: list[EdgeCandidate],
     reviews: dict[RGB, float],
     params: DecontaminationParams,
+    boundary_evidence: dict | None = None,
 ) -> dict[tuple[int, int], float]:
     """Decide the pull strength for every edge pixel.
 
     - every edge pixel            : base_blend
     - rule-confirmed (force)      : force_blend, unless Jev says subject detail
     - semantic REMOVE             : base_blend + scaled extra (0..jev_max_extra_blend)
+    - boundary local_bg_score    : boost blend for pixels closer to background side
     """
     blend: dict[tuple[int, int], float] = {
         (int(y), int(x)): params.base_blend for y, x in np.argwhere(edge)
@@ -151,6 +157,20 @@ def build_blend_map(
                 * params.jev_max_extra_blend
             )
             blend[key] = max(blend[key], extra)
+
+    # Boundary Normal Sampling boost: pixels closer to background side
+    # get extra pull toward interior. Only applies to non-force pixels
+    # (force pixels already get force_blend).
+    if boundary_evidence:
+        force_keys = {(c.y, c.x) for c in candidates if c.force}
+        for (y, x), ev in boundary_evidence.items():
+            key = (int(y), int(x))
+            if key in blend and key not in force_keys:
+                score = ev.get("local_bg_score", 0.5)
+                if score > 0.75:  # very clearly background-side only
+                    boost = (score - 0.75) * 0.3
+                    blend[key] = min(1.0, blend[key] + boost)
+
     return blend
 
 
@@ -207,7 +227,7 @@ def decontaminate(
         if it > 0 and abs(edge_px - last_edge_px) < max(5, edge_px * 0.03):
             print(f"  converged at iter {it+1} (edge px stable)")
             reviews: dict[RGB, float] = {}
-            blend = build_blend_map(edge, candidates, reviews, params)
+            blend = build_blend_map(edge, candidates, reviews, params, masks.get("boundary_evidence"))
             arr = np.asarray(im).astype(np.float64)
             result = apply_decontamination(arr, blend, masks["iy"], masks["ix"], params)
             Image.fromarray(result.astype(np.uint8)).save(out_path)
@@ -221,7 +241,7 @@ def decontaminate(
                 raise ValueError("a reviewer is required unless --skip-jev is set")
             reviews = reviewer.review(candidates)
 
-        blend = build_blend_map(edge, candidates, reviews, params)
+        blend = build_blend_map(edge, candidates, reviews, params, masks.get("boundary_evidence"))
         arr = np.asarray(im).astype(np.float64)
         result = apply_decontamination(arr, blend, masks["iy"], masks["ix"], params)
 

@@ -43,4 +43,4 @@ class DecontaminationParams:
     jev_threshold: float = 0.40        # model probability above this -> REMOVE
     jev_uncertain_floor: float = 0.30  # below this -> KEEP
     jev_max_extra_blend: float = 0.50  # max extra pull granted by semantic review
-    alpha_decay: float = 0.60          # alpha loss = blend * alpha_decay
+    alpha_decay: float = 0.40          # alpha loss = blend * alpha_decay
