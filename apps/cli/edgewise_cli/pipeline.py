@@ -79,9 +79,10 @@ def analyze_frame(
         rgb = rgba_init[:, :, :3]
         rgba = remove_background(rgb, params.wall_rgb, params.background_tolerance)
 
-        # Region Analyzer: detect trapped background regions and decide
-        # which ones to remove (replaces simple pixel-distance threshold).
+        # Region Analyzer + Confidence Engine: three-tier decision per region
+        # (REMOVE / KEEP / UNCERTAIN). UNCERTAIN regions get passed to Jev.
         from edgewise_core.segmentation.analyzer import detect_regions
+        from edgewise_core.segmentation.confidence import decide_region
         from edgewise_core.mask.trapped import detect_trapped_background
 
         trapped = detect_trapped_background(rgba, params.wall_rgb)
@@ -91,21 +92,17 @@ def analyze_frame(
             regions = detect_regions(trapped, alpha_px, rgb_px, params.wall_rgb)
             removed_regions = 0
             removed_px = 0
+            uncertain_regions = 0
             for region in regions:
-                f = region.features
-                # Deterministic decision: high enclosure + high bg similarity
-                # + low reachability = definitely trapped background gap
-                is_trapped_gap = (
-                    f.enclosure > 0.7
-                    and f.background_similarity > 0.7
-                    and f.background_reachability < 0.2
-                )
-                if is_trapped_gap:
+                decision = decide_region(region.features)
+                if decision.decision == "REMOVE":
                     for y, x in region.pixels:
                         rgba[int(y), int(x), 3] = int(rgba[int(y), int(x), 3] * 0.5)
                     removed_regions += 1
                     removed_px += region.area
-            print(f"  regions: {len(regions)}, trapped gaps removed: {removed_regions} ({removed_px} px)")
+                elif decision.decision == "UNCERTAIN":
+                    uncertain_regions += 1
+            print(f"  regions: {len(regions)}, REMOVE: {removed_regions} ({removed_px} px), UNCERTAIN: {uncertain_regions}")
 
         im = Image.fromarray(rgba.astype(np.uint8))
     else:
