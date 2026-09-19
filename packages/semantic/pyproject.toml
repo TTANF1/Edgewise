@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "edgewise-semantic"
+version = "0.1.0"
+description = "Swappable semantic review backends for edgewise (Layer 2)"
+requires-python = ">=3.10"
+dependencies = [
+    "edgewise-types",
+]
+
+[project.optional-dependencies]
+# The Jev adapter only needs the SDK at runtime, so it is optional here.
+api = ["typesafe-sdk"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["edgewise_semantic*"]

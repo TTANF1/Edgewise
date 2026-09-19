@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "edgewise-types"
+version = "0.1.0"
+description = "Shared contracts for the edgewise pipeline (candidates, params, decisions)"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["edgewise_types*"]

@@ -1,0 +1,21 @@
+{
+  "cutout": {
+    "src_dir": "assets/frames_src",
+    "out_dir": "assets/frames_clean",
+    "pattern": "f*.png",
+    "params": {
+      "wall_rgb": [210, 218, 228],
+      "background_tolerance": 30.0,
+      "jev_threshold": 0.4,
+      "scene_hint": "developer at desk"
+    }
+  },
+  "rebuild": {
+    "frames_dir": "assets/frames_clean",
+    "out_dir": "assets",
+    "pattern": "f*.png",
+    "duration_ms": 165,
+    "webp_quality": 90,
+    "sheet_name": "after.png"
+  }
+}

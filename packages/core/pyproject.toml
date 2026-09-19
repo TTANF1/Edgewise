@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "edgewise-core"
+version = "0.1.0"
+description = "Deterministic graphics primitives for pixel-art edge processing (Layer 1)"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "edgewise-types",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["edgewise_core*"]
