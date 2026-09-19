@@ -78,6 +78,13 @@ def analyze_frame(
         # Opaque wall-backed frame: flood-fill the wall to transparency first.
         rgb = rgba_init[:, :, :3]
         rgba = remove_background(rgb, params.wall_rgb, params.background_tolerance)
+        # Then clear trapped background (pixels enclosed by subject that
+        # flood-fill couldn't reach — gaps between monitor and wall, etc.)
+        from edgewise_core.mask.trapped import clear_trapped_background, detect_trapped_background
+        trapped = detect_trapped_background(rgba, params.wall_rgb)
+        if trapped.any():
+            print(f"  trapped background: {int(trapped.sum())} px")
+            rgba = clear_trapped_background(rgba, trapped)
         im = Image.fromarray(rgba.astype(np.uint8))
     else:
         im = opened.convert("RGBA")
@@ -102,7 +109,7 @@ def build_blend_map(
     """Decide the pull strength for every edge pixel.
 
     - every edge pixel            : base_blend
-    - rule-confirmed (force)      : force_blend
+    - rule-confirmed (force)      : force_blend, unless Jev says subject detail
     - semantic REMOVE             : base_blend + scaled extra (0..jev_max_extra_blend)
     """
     blend: dict[tuple[int, int], float] = {
@@ -110,11 +117,15 @@ def build_blend_map(
     }
     for c in candidates:
         key = (c.y, c.x)
+        probability = reviews.get(c.edge_rgb)
         if c.force:
-            blend[key] = params.force_blend
+            # Jev can downgrade force pixels that are actually subject detail.
+            if probability is not None and probability < params.jev_uncertain_floor:
+                blend[key] = params.base_blend  # protect: don't over-pull
+            else:
+                blend[key] = params.force_blend
             continue
-        probability = reviews.get(c.edge_rgb, params.jev_uncertain_floor)
-        if probability > params.jev_threshold:
+        if probability is not None and probability > params.jev_threshold:
             extra = (
                 (probability - params.jev_threshold)
                 / (1.0 - params.jev_threshold)

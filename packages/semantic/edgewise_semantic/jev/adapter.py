@@ -38,15 +38,23 @@ class JevReviewer:
                 "--skip-jev to run the rules-only pipeline."
             )
 
-        # Rule-confirmed candidates skip semantic review entirely.
-        to_check = [c for c in candidates if not c.force]
+        # Review ALL candidates (including rule-force) so Jev can downgrade
+        # false-positive force pixels that are actually subject detail.
         # Deduplicate by color, keeping the sample with the largest color
         # distance (the most informative example of that color).
         best: dict[RGB, EdgeCandidate] = {}
-        for c in to_check:
+        for c in candidates:
             prev = best.get(c.edge_rgb)
             if prev is None or c.color_dist > prev.color_dist:
                 best[c.edge_rgb] = c
+
+        # Cap at 50 colors to stay within API token limits.
+        # Prioritize: non-force uncertain colors first, then force colors.
+        sorted_colors = sorted(
+            best.items(),
+            key=lambda kv: (kv[1].force, -kv[1].color_dist),  # False (non-force) first
+        )
+        best = dict(sorted_colors[:50])
 
         if not best:
             return {}
