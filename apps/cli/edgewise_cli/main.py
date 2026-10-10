@@ -30,6 +30,13 @@ def _positive_float(text: str) -> float:
     return value
 
 
+def _positive_int(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be >= 1")
+    return value
+
+
 def _rgb(text: str) -> tuple[int, int, int]:
     parts = [int(p) for p in text.split(",")]
     if len(parts) != 3 or any(p < 0 or p > 255 for p in parts):
@@ -132,6 +139,7 @@ def cmd_cutout(args: argparse.Namespace) -> int:
             params,
             reviewer=reviewer,
             skip_jev=args.skip_jev,
+            iterations=args.iterations,
         )
     print(f"done -> {out_dir}")
     return 0
@@ -186,6 +194,8 @@ def build_parser() -> argparse.ArgumentParser:
     cut.add_argument("--base-blend", type=_positive_float, help="Base edge pull toward interior (default 0.30)")
     cut.add_argument("--force-blend", type=_positive_float, help="Rule-confirmed pull (default 0.80)")
     cut.add_argument("--skip-jev", action="store_true", help="Run rules only; no API calls")
+    cut.add_argument("--iterations", type=_positive_int, default=3,
+                     help="Maximum refinement rounds (default 3; stops when pixels stabilize)")
     cut.add_argument(
         "--remove-background",
         nargs="?",

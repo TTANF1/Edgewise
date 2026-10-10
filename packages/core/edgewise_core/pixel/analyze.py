@@ -32,6 +32,7 @@ class InputAnalysis:
 def _sample_border_colors(rgb: np.ndarray, margin: int = 8) -> np.ndarray:
     """Sample pixels from the four corners (small patches, robust to subject intrusion)."""
     h, w = rgb.shape[:2]
+    margin = min(margin, h, w)
     corners = [
         rgb[0:margin, 0:margin],          # top-left
         rgb[0:margin, w - margin:w],       # top-right

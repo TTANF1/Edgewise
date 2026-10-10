@@ -21,3 +21,6 @@ Thumbs.db
 
 # Memory dumps
 .memory/
+
+# Reproducible local benchmark outputs
+artifacts/

@@ -18,29 +18,33 @@ from edgewise_core.edge.detect import edge_and_interior_masks, nearest_interior_
 from edgewise_core.edge.rules import flag_edge_pixels
 from edgewise_core.mask.background import remove_background
 from edgewise_core.pixel.analyze import analyze_input
-from edgewise_core.pixel.color import blend_toward
 from edgewise_semantic.protocol import SemanticReviewer
 from edgewise_types.candidate import EdgeCandidate, RGB
-from edgewise_types.decision import Decision, decision_from_probability
 from edgewise_types.params import DecontaminationParams
 
-Masks = dict[str, np.ndarray]
+Masks = dict[str, Any]
 Analysis = tuple[Image.Image, list[EdgeCandidate], Masks]
 
 
 def analyze_frame(
-    img_path: str,
+    img_path: str | Image.Image,
     params: DecontaminationParams,
     reviewer: SemanticReviewer | None = None,
     skip_jev: bool = False,
+    *,
+    preprocess: bool = True,
 ) -> Analysis:
-    """Layer 1: Step 0 input analysis + masks, candidates. No API."""
-    opened = Image.open(img_path)
-    rgba_init = np.asarray(opened.convert("RGBA")).astype(np.float64)
+    """Analyze masks/candidates, optionally preparing the background once."""
+    if isinstance(img_path, Image.Image):
+        opened = img_path.convert("RGBA")
+    else:
+        with Image.open(img_path) as source:
+            opened = source.convert("RGBA")
+    rgba_init = np.asarray(opened).astype(np.float64)
 
     # Step 0: auto-detect frame properties (opaque? wall color?)
     info = analyze_input(rgba_init)
-    if info.needs_background_removal and params.background_tolerance is None:
+    if preprocess and info.needs_background_removal and params.background_tolerance is None:
         # Auto-enable background removal with detected wall color
         params = replace(
             params,
@@ -52,6 +56,7 @@ def analyze_frame(
     # Step 0b: Jev wall-color confirmation when auto-detection is uncertain
     if (
         reviewer is not None
+        and preprocess
         and not skip_jev
         and info.needs_background_removal
         and info.wall_std > 15.0  # corner colors disagree → ask Jev
@@ -64,7 +69,7 @@ def analyze_frame(
         )
         candidates = sorted_by_lum[::max(1, len(sorted_by_lum) // 3)][:3]
         h, w = rgba_init.shape[:2]
-        center = rgba_init[h // 2 - 5:h // 2 + 5, w // 2 - 5:w // 2 + 5, :3].mean(axis=(0, 1))
+        center = rgba_init[max(0, h // 2 - 5):h // 2 + 5, max(0, w // 2 - 5):w // 2 + 5, :3].mean(axis=(0, 1))
         interior_sample = tuple(int(v) for v in center)
 
         confirmed = reviewer.confirm_background_color(candidates, interior_sample)
@@ -74,13 +79,15 @@ def analyze_frame(
         else:
             print(f"  [jev] wall_rgb uncertain, keeping {info.wall_rgb}")
 
-    if params.background_tolerance is not None:
+    if preprocess and params.background_tolerance is not None:
         # Opaque wall-backed frame: flood-fill the wall to transparency first.
         rgb = rgba_init[:, :, :3]
         rgba = remove_background(rgb, params.wall_rgb, params.background_tolerance)
+        rgba[:, :, 3] = np.minimum(rgba[:, :, 3], rgba_init[:, :, 3])
 
         # Region Analyzer + Confidence Engine: three-tier decision per region
-        # (REMOVE / KEEP / UNCERTAIN). UNCERTAIN regions get passed to Jev.
+        # (REMOVE / KEEP / UNCERTAIN). Uncertain regions are retained until
+        # a region-review backend is implemented.
         from edgewise_core.segmentation.analyzer import detect_regions
         from edgewise_core.segmentation.confidence import decide_region
         from edgewise_core.mask.trapped import detect_trapped_background
@@ -110,8 +117,10 @@ def analyze_frame(
     arr = np.asarray(im).astype(np.float64)
     r, g, b, alpha = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2], arr[:, :, 3]
 
-    _, _, edge, interior = edge_and_interior_masks(alpha, params.alpha_threshold)
-    iy, ix = nearest_interior_indices(interior)
+    _, opaque, edge, interior = edge_and_interior_masks(alpha, params.alpha_threshold)
+    iy, ix = nearest_interior_indices(interior, opaque)
+    yy, xx = np.indices(edge.shape)
+    edge &= (iy != yy) | (ix != xx)
 
     candidates = flag_edge_pixels(edge, r, g, b, iy, ix, params)
 
@@ -119,7 +128,7 @@ def analyze_frame(
     from edgewise_core.edge.normal_sampling import boundary_evidence
     evidence = boundary_evidence(arr, edge, interior)
 
-    masks: Masks = {"edge": edge, "iy": iy, "ix": ix, "boundary_evidence": evidence}
+    masks: Masks = {"edge": edge, "iy": iy, "ix": ix, "boundary_evidence": evidence, "params": params}
     return im, candidates, masks
 
 
@@ -132,23 +141,24 @@ def build_blend_map(
 ) -> dict[tuple[int, int], float]:
     """Decide the pull strength for every edge pixel.
 
-    - every edge pixel            : base_blend
+    - unflagged edge pixels       : unchanged
     - rule-confirmed (force)      : force_blend, unless Jev says subject detail
     - semantic REMOVE             : base_blend + scaled extra (0..jev_max_extra_blend)
     - boundary local_bg_score    : boost blend for pixels closer to background side
     """
-    blend: dict[tuple[int, int], float] = {
-        (int(y), int(x)): params.base_blend for y, x in np.argwhere(edge)
-    }
+    blend: dict[tuple[int, int], float] = {}
+    protected = set()
     for c in candidates:
         key = (c.y, c.x)
+        if not edge[key]:
+            continue
         probability = reviews.get(c.edge_rgb)
+        if probability is not None and probability < params.jev_uncertain_floor:
+            protected.add(key)
+            continue
+        blend[key] = params.base_blend
         if c.force:
-            # Jev can downgrade force pixels that are actually subject detail.
-            if probability is not None and probability < params.jev_uncertain_floor:
-                blend[key] = params.base_blend  # protect: don't over-pull
-            else:
-                blend[key] = params.force_blend
+            blend[key] = params.force_blend
             continue
         if probability is not None and probability > params.jev_threshold:
             extra = (
@@ -156,7 +166,7 @@ def build_blend_map(
                 / (1.0 - params.jev_threshold)
                 * params.jev_max_extra_blend
             )
-            blend[key] = max(blend[key], extra)
+            blend[key] = min(1.0, params.base_blend + extra)
 
     # Boundary Normal Sampling boost: pixels closer to background side
     # get extra pull toward interior. Only applies to non-force pixels
@@ -165,7 +175,7 @@ def build_blend_map(
         force_keys = {(c.y, c.x) for c in candidates if c.force}
         for (y, x), ev in boundary_evidence.items():
             key = (int(y), int(x))
-            if key in blend and key not in force_keys:
+            if key in blend and key not in force_keys and key not in protected:
                 score = ev.get("local_bg_score", 0.5)
                 if score > 0.75:  # very clearly background-side only
                     boost = (score - 0.75) * 0.3
@@ -183,16 +193,17 @@ def apply_decontamination(
 ) -> np.ndarray:
     """Pull edge RGB toward the nearest interior pixel and shrink alpha."""
     result = arr.copy()
-    for (y, x), b in blend.items():
-        edge_rgb = (int(result[y, x, 0]), int(result[y, x, 1]), int(result[y, x, 2]))
-        interior_rgb = (
-            int(result[iy[y, x], ix[y, x], 0]),
-            int(result[iy[y, x], ix[y, x], 1]),
-            int(result[iy[y, x], ix[y, x], 2]),
+    if blend:
+        coords = np.array(list(blend), dtype=int)
+        y, x = coords[:, 0], coords[:, 1]
+        strength = np.array(list(blend.values()))
+        # All references come from the same immutable input, independent of
+        # iteration order. Vectorization avoids a Python loop per pixel.
+        result[y, x, :3] = np.trunc(
+            arr[y, x, :3] * (1-strength[:, None])
+            + arr[iy[y, x], ix[y, x], :3] * strength[:, None]
         )
-        nr, ng, nb = blend_toward(edge_rgb, interior_rgb, b)
-        result[y, x, 0], result[y, x, 1], result[y, x, 2] = nr, ng, nb
-        result[y, x, 3] = int(result[y, x, 3] * (1.0 - b * params.alpha_decay))
+        result[y, x, 3] = np.trunc(arr[y, x, 3] * (1-strength*params.alpha_decay))
     return result
 
 
@@ -204,69 +215,65 @@ def decontaminate(
     skip_jev: bool = False,
     iterations: int = 3,
 ) -> dict[str, Any]:
-    """Full pipeline for one frame, iterated. Returns stats for reporting.
+    """Process background once, then refine in memory until pixels stabilize.
 
-    Each iteration feeds the previous output back as input — residual halo
-    pixels that were semi-transparent last round become edge pixels this
-    round and get tightened further. Jev quality check decides when to stop.
+    Intermediate files are only needed by the optional quality reviewer.
+    The final output is always saved, including an early quality stop.
     """
-    current_path = img_path
-    last_edge_px = -1
+    if iterations < 1:
+        raise ValueError("iterations must be >= 1")
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+
+    with Image.open(img_path) as source:
+        current = source.convert("RGBA")
     quality_history: list[float] = []
-
-    for it in range(iterations):
-        im, candidates, masks = analyze_frame(current_path, params, reviewer, skip_jev)
-        edge = masks["edge"]
-        edge_px = int(edge.sum())
-        print(
-            f"  [iter {it+1}/{iterations}] edge: {edge_px}, flagged: {len(candidates)}, "
-            f"force: {sum(1 for c in candidates if c.force)}"
-        )
-
-        # Convergence check: edge px barely changed → stop early
-        if it > 0 and abs(edge_px - last_edge_px) < max(5, edge_px * 0.03):
-            print(f"  converged at iter {it+1} (edge px stable)")
+    change_history: list[int] = []
+    stop_reason = "iteration_limit"
+    from contextlib import nullcontext
+    temporary = (TemporaryDirectory(prefix="edgewise-", dir=Path(out_path).resolve().parent)
+                 if reviewer is not None and not skip_jev else nullcontext(None))
+    with temporary as temp_dir:
+        for it in range(iterations):
+            im, candidates, masks = analyze_frame(current, params, reviewer, skip_jev,
+                                                  preprocess=it == 0)
+            params = masks["params"]
+            edge = masks["edge"]
+            edge_px = int(edge.sum())
+            print(f"  [iter {it+1}/{iterations}] edge: {edge_px}, flagged: {len(candidates)}, "
+                  f"force: {sum(c.force for c in candidates)}")
             reviews: dict[RGB, float] = {}
-            blend = build_blend_map(edge, candidates, reviews, params, masks.get("boundary_evidence"))
+            if candidates and not skip_jev:
+                if reviewer is None:
+                    raise ValueError("a reviewer is required unless --skip-jev is set")
+                reviews = reviewer.review(candidates)
+            blend = build_blend_map(edge, candidates, reviews, params,
+                                    masks.get("boundary_evidence"))
             arr = np.asarray(im).astype(np.float64)
             result = apply_decontamination(arr, blend, masks["iy"], masks["ix"], params)
-            Image.fromarray(result.astype(np.uint8)).save(out_path)
-            print(f"  tightened {len(blend)} edge px")
-            break
-        last_edge_px = edge_px
-
-        reviews: dict[RGB, float] = {}
-        if candidates and not skip_jev:
-            if reviewer is None:
-                raise ValueError("a reviewer is required unless --skip-jev is set")
-            reviews = reviewer.review(candidates)
-
-        blend = build_blend_map(edge, candidates, reviews, params, masks.get("boundary_evidence"))
-        arr = np.asarray(im).astype(np.float64)
-        result = apply_decontamination(arr, blend, masks["iy"], masks["ix"], params)
-
-        if it == iterations - 1:
-            Image.fromarray(result.astype(np.uint8)).save(out_path)
-            current_path = out_path
-        else:
-            import tempfile
-            tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-            Image.fromarray(result.astype(np.uint8)).save(tmp.name)
-            current_path = tmp.name
-
-        print(f"  tightened {len(blend)} edge px")
-
-        # Jev quality evaluation: stop early if clean enough
-        if reviewer is not None and not skip_jev and it < iterations - 1:
-            report = reviewer.evaluate_quality(current_path, params.wall_rgb)
-            quality_history.append(report.quality_score)
-            print(f"  [jev] quality={report.quality_score:.2f}, issues: {report.issues or 'none'}")
-            if not report.needs_more_iterations:
-                print(f"  Jev says clean enough at iter {it+1}")
+            changed = int(np.any(result != arr, axis=2).sum())
+            change_history.append(changed)
+            current = Image.fromarray(result.astype(np.uint8))
+            print(f"  changed {changed} pixels")
+            # Background removal and trapped-region handling only happen once.
+            params = replace(params, background_tolerance=None)
+            if changed == 0:
+                stop_reason = "pixels_stable"
                 break
-
+            if reviewer is not None and not skip_jev and it < iterations-1:
+                quality_path = str(Path(temp_dir) / "quality.png")
+                current.save(quality_path)
+                report = reviewer.evaluate_quality(quality_path, params.wall_rgb)
+                quality_history.append(report.quality_score)
+                if not report.needs_more_iterations:
+                    stop_reason = "quality_accepted"
+                    break
+        current.save(out_path)
     return {
         "edge_px": edge_px,
-        "iterations": it + 1,
+        "iterations": it+1,
         "quality_history": quality_history,
+        "changed_pixels": change_history,
+        "stop_reason": stop_reason,
+        "wall_rgb": params.wall_rgb,
     }

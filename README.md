@@ -68,6 +68,26 @@ pip install -e packages/types -e packages/core -e packages/semantic -e apps/cli
 edgewise cutout input_dir/ output_dir/ --skip-jev
 ```
 
+Only flagged edge pixels are refined. Clean edges and thin components without
+a nearby interior reference keep their original pixels. Background preparation
+runs once; refinement runs in memory and stops when pixels stop changing,
+up to `--iterations` (default 3). Semantic KEEP verdicts protect flagged pixels.
+
+### Offline quality checks
+
+```powershell
+.venv/Scripts/python.exe -m unittest discover -s apps/cli/tests -v
+.venv/Scripts/python.exe packages/core/tests/test_rules.py
+.venv/Scripts/python.exe packages/types/tests/test_decision.py
+.venv/Scripts/python.exe scripts/benchmark_cutout.py --label current
+```
+
+The benchmark processes eight desk frames, the hand-drawn favicon, and two
+generated regression fixtures. PNGs, white/black/checker composites and JSON
+metrics are written to `artifacts/cutout-review/current/`. Synthetic fixtures have
+known expected pixels; real examples are visual checks without ground-truth masks.
+See [the review report](docs/cutout-review-2026-10-10.md) for findings and limitations.
+
 ### Rebuild sprite sheet
 
 ```bash

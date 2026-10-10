@@ -66,7 +66,7 @@ def boundary_evidence(
 
         # local_bg_score: 0 = looks like foreground, 1 = looks like background
         total = fg_dist + bg_dist
-        local_bg_score = bg_dist / total if total > 0 else 0.5
+        local_bg_score = fg_dist / total if total > 0 else 0.5
 
         result[(int(y), int(x))] = {
             "edge_rgb": tuple(int(v) for v in edge_rgb),
